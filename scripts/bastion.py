@@ -591,12 +591,15 @@ def compute_file_risk(findings: list) -> str:
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_scan(workspace: Path, target: str = None):
+def cmd_scan(workspace: Path, target: str = None, json_output: bool = False):
     """Scan files for prompt injection patterns."""
     files = collect_scannable_files(workspace, target)
 
     if not files:
-        print("No scannable files found.")
+        if json_output:
+            print(json.dumps({"findings": []}))
+        else:
+            print("No scannable files found.")
         return 0
 
     all_findings = []
@@ -608,6 +611,25 @@ def cmd_scan(workspace: Path, target: str = None):
             all_findings.extend(findings)
             file_risks[rel] = compute_file_risk(findings)
 
+    crits = sum(1 for f in all_findings if f["severity"] == SEVERITY_CRITICAL)
+    warns = sum(1 for f in all_findings if f["severity"] == SEVERITY_WARNING)
+    infos = sum(1 for f in all_findings if f["severity"] == SEVERITY_INFO)
+
+    # JSON output mode
+    if json_output:
+        json_findings = []
+        for f in all_findings:
+            json_findings.append({
+                "file": f["file"],
+                "line": f["line"],
+                "severity": "high" if f["severity"] == SEVERITY_CRITICAL else f["severity"].lower(),
+                "message": f"{f['pattern_type']}: {f['detail']}",
+                "type": f["pattern_type"],
+                "matched": f.get("matched", ""),
+            })
+        print(json.dumps({"findings": json_findings}, indent=2))
+        return 2 if crits else (1 if warns or infos else 0)
+
     # --- Report ---
     print("=" * 64)
     print("BASTION INJECTION SCAN")
@@ -618,10 +640,6 @@ def cmd_scan(workspace: Path, target: str = None):
     print(f"Scanned   : {len(files)} files")
     print(f"Timestamp : {now_iso()}")
     print()
-
-    crits = sum(1 for f in all_findings if f["severity"] == SEVERITY_CRITICAL)
-    warns = sum(1 for f in all_findings if f["severity"] == SEVERITY_WARNING)
-    infos = sum(1 for f in all_findings if f["severity"] == SEVERITY_INFO)
 
     if not all_findings:
         print("RESULT: CLEAN")
@@ -1009,6 +1027,10 @@ def build_parser() -> argparse.ArgumentParser:
         "target", nargs="?", default=None,
         help="File or directory to scan (defaults to entire workspace)",
     )
+    p_scan.add_argument(
+        "--json", action="store_true",
+        help="Output findings in JSON format",
+    )
 
     # check
     p_check = sub.add_parser("check", help="Quick single-file injection check")
@@ -1042,7 +1064,7 @@ def main():
     workspace = resolve_workspace(args.workspace)
 
     if args.command == "scan":
-        code = cmd_scan(workspace, args.target)
+        code = cmd_scan(workspace, args.target, json_output=getattr(args, "json", False))
         sys.exit(code)
 
     elif args.command == "check":
